@@ -4,8 +4,8 @@ services:
     env: node
     region: oregon
     plan: free
-    buildCommand: npm ci && npm run build
-    startCommand: node dist/index-http.js
+    buildCommand: npm ci && npm run build && ls -la dist/
+    startCommand: "cd /opt/render/project/src && node dist/index-http.js"
     healthCheckPath: /health
     autoDeploy: true
     envVars:
@@ -13,3 +13,5 @@ services:
         value: production
       - key: PORT
         value: 10000
+      - key: DEPLOYMENT_VERSION
+        value: "1.0.1"
