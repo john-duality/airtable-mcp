@@ -10,10 +10,10 @@
     "url": "git+https://github.com/jjwjr94/airtable-mcp.git"
   },
   "homepage": "https://github.com/jjwjr94/airtable-mcp",
-  "main": "dist/index.js",
+  "main": "dist/index-http.js",
   "type": "module",
   "bin": {
-    "mcp-server-airtable": "dist/index.js"
+    "mcp-server-airtable": "dist/index-http.js"
   },
   "files": [
     "dist",
@@ -28,7 +28,7 @@
     "test": "node test-http-server.js",
     "watch": "tsc -w",
     "prepublishOnly": "npm run build",
-    "inspector": "npx @modelcontextprotocol/inspector dist/index.js"
+    "inspector": "npx @modelcontextprotocol/inspector dist/index-http.js"
   },
   "keywords": [
     "airtable",
