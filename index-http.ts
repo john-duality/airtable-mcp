@@ -73,6 +73,27 @@ class AirtableHttpServer {
     res.write(`data: ${JSON.stringify(response)}\n\n`);
   }
 
+  private sendHttpStreamResponse(res: express.Response, requestId: string, data?: any, error?: string) {
+    if (error) {
+      const errorResponse = {
+        jsonrpc: "2.0",
+        id: requestId,
+        error: {
+          code: -32000,
+          message: error
+        }
+      };
+      res.write(`data: ${JSON.stringify(errorResponse)}\n\n`);
+    } else if (data) {
+      const successResponse = {
+        jsonrpc: "2.0",
+        id: requestId,
+        result: data
+      };
+      res.write(`data: ${JSON.stringify(successResponse)}\n\n`);
+    }
+  }
+
   private setupRoutes() {
     // Health check endpoint
     this.app.get('/health', (req, res) => {
@@ -202,6 +223,182 @@ class AirtableHttpServer {
       res.end();
     });
 
+    // HTTP Streamable MCP endpoint (proper MCP format)
+    this.app.post('/mcp-stream', async (req, res) => {
+      const requestId = req.body.id || `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      
+      // Set headers for HTTP Streamable
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Headers': 'Content-Type, Accept, Authorization, x-airtable-api-key, x-airtable-base-id'
+      });
+
+      try {
+        // Get credentials from headers
+        const apiKey = req.headers['x-airtable-api-key'] as string;
+        const baseId = req.headers['x-airtable-base-id'] as string;
+        
+        if (!apiKey || !baseId) {
+          this.sendHttpStreamResponse(res, requestId, null, 'Airtable API key and base ID required. Set x-airtable-api-key and x-airtable-base-id headers.');
+          res.end();
+          return;
+        }
+
+        // Create fresh Airtable client
+        const airtableClient = new AirtableClientWrapper(apiKey, baseId);
+        const toolHandler = tool_handler;
+
+        const { method, params } = req.body;
+
+        if (!method) {
+          this.sendHttpStreamResponse(res, requestId, null, 'MCP method is required');
+          res.end();
+          return;
+        }
+
+        let result: any;
+
+        // Handle different MCP methods
+        switch (method) {
+          case 'initialize':
+            result = {
+              protocolVersion: "2025-06-18",
+              capabilities: {
+                tools: {},
+                resources: {}
+              },
+              serverInfo: {
+                name: "Airtable MCP HTTP Server",
+                version: VERSION
+              }
+            };
+            break;
+
+          case 'tools/list':
+            result = {
+              tools: list_of_tools
+            };
+            break;
+
+          case 'tools/call':
+            if (!params || !params.name) {
+              this.sendHttpStreamResponse(res, requestId, null, 'Tool name is required for tools/call');
+              res.end();
+              return;
+            }
+            
+            // Find the tool
+            const tool = list_of_tools.find(t => t.name === params.name);
+            if (!tool) {
+              this.sendHttpStreamResponse(res, requestId, null, `Tool '${params.name}' not found`);
+              res.end();
+              return;
+            }
+            
+            // Execute the tool
+            result = await toolHandler(params.name, params.arguments || {}, airtableClient);
+            break;
+
+          default:
+            this.sendHttpStreamResponse(res, requestId, null, `Unsupported MCP method: ${method}`);
+            res.end();
+            return;
+        }
+
+        // Send the result in proper HTTP Streamable format
+        this.sendHttpStreamResponse(res, requestId, result);
+
+      } catch (error) {
+        console.error('Error executing MCP operation:', error);
+        this.sendHttpStreamResponse(res, requestId, null, error instanceof Error ? error.message : 'Unknown error');
+      }
+
+      res.end();
+    });
+
+    // Simple JSON endpoint (non-streaming)
+    this.app.post('/mcp-json', async (req, res) => {
+      try {
+        // Get credentials from headers
+        const apiKey = req.headers['x-airtable-api-key'] as string;
+        const baseId = req.headers['x-airtable-base-id'] as string;
+        
+        if (!apiKey || !baseId) {
+          return res.status(400).json({ 
+            error: 'Airtable API key and base ID required. Set x-airtable-api-key and x-airtable-base-id headers.' 
+          });
+        }
+
+        // Create fresh Airtable client
+        const airtableClient = new AirtableClientWrapper(apiKey, baseId);
+        const toolHandler = tool_handler;
+
+        const { method, params } = req.body;
+
+        if (!method) {
+          return res.status(400).json({ error: 'MCP method is required' });
+        }
+
+        let result: any;
+
+        // Handle different MCP methods
+        switch (method) {
+          case 'initialize':
+            result = {
+              protocolVersion: "2025-06-18",
+              capabilities: {
+                tools: {},
+                resources: {}
+              },
+              serverInfo: {
+                name: "Airtable MCP HTTP Server",
+                version: VERSION
+              }
+            };
+            break;
+
+          case 'tools/list':
+            result = {
+              tools: list_of_tools
+            };
+            break;
+
+          case 'tools/call':
+            if (!params || !params.name) {
+              return res.status(400).json({ error: 'Tool name is required for tools/call' });
+            }
+            
+            // Find the tool
+            const tool = list_of_tools.find(t => t.name === params.name);
+            if (!tool) {
+              return res.status(404).json({ error: `Tool '${params.name}' not found` });
+            }
+            
+            // Execute the tool
+            result = await toolHandler(params.name, params.arguments || {}, airtableClient);
+            break;
+
+          default:
+            return res.status(400).json({ error: `Unsupported MCP method: ${method}` });
+        }
+
+        // Send simple JSON response
+        res.json({
+          success: true,
+          data: result
+        });
+
+      } catch (error) {
+        console.error('Error executing MCP operation:', error);
+        res.status(500).json({ 
+          error: error instanceof Error ? error.message : 'Unknown error' 
+        });
+      }
+    });
+
     // Legacy endpoints for backward compatibility
     this.app.get('/tools', (req, res) => {
       res.json(list_of_tools);
@@ -271,7 +468,9 @@ class AirtableHttpServer {
     this.app.listen(this.port, () => {
       console.log(`🚀 Airtable MCP HTTP Server v${VERSION} running on port ${this.port}`);
       console.log(`📊 Health check: http://localhost:${this.port}/health`);
-      console.log(`🔧 MCP endpoint: http://localhost:${this.port}/mcp`);
+      console.log(`🔧 MCP endpoint (SSE): http://localhost:${this.port}/mcp`);
+      console.log(`🌊 MCP HTTP Streamable: http://localhost:${this.port}/mcp-stream`);
+      console.log(`📄 MCP JSON endpoint: http://localhost:${this.port}/mcp-json`);
       console.log(`🔑 Set credentials: http://localhost:${this.port}/set-credentials`);
       console.log(`🛠️ Legacy tools endpoint: http://localhost:${this.port}/tools`);
     });
