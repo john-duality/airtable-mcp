@@ -14,9 +14,9 @@ export default async function handler(req, res) {
       headers: {
         'Content-Type': 'application/json',
         'x-airtable-api-key': apiKey,
-        'x-airtable-base-id': baseId,
+        'x-airtable-base-id': baseId
       },
-      body: JSON.stringify(req.body ?? {}),
+      body: JSON.stringify(req.body ?? {})
     });
 
     const text = await upstreamRes.text();
